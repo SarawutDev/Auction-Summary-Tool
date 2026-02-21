@@ -1,0 +1,5 @@
+{
+  "name": "Auction Summary Tool",
+  "description": "A tool to summarize auction results, grouping items by winner and calculating total amounts. Supports AI-powered parsing of raw auction text.",
+  "requestFramePermissions": []
+}
