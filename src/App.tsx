@@ -24,7 +24,12 @@ import {
   Maximize2,
   MapPin,
   Edit3,
-  Printer
+  Printer,
+  Calendar,
+  History,
+  ArrowLeft,
+  AlertTriangle,
+  FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -64,25 +69,90 @@ export default function App() {
   const [senderAddress, setSenderAddress] = useState('');
   const [isEditingSender, setIsEditingSender] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [view, setView] = useState<'main' | 'history'>('history');
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [allDates, setAllDates] = useState<{ date: string, total: number }[]>([]);
+  const [isAddingDate, setIsAddingDate] = useState(false);
+  const [tempDate, setTempDate] = useState(new Date().toISOString().split('T')[0]);
+  const [deletingDate, setDeletingDate] = useState<string | null>(null);
+  const [isClearingAll, setIsClearingAll] = useState(false);
 
-  // Load data on mount
+  const deleteHistoryDate = async (date: string) => {
+    try {
+      await localforage.removeItem(`auction_items_${date}`);
+      await localforage.removeItem(`auction_images_${date}`);
+      await localforage.removeItem(`auction_statuses_${date}`);
+      await localforage.removeItem(`auction_shipping_fee_${date}`);
+      
+      // Remove from created dates list
+      const createdDates = await localforage.getItem<string[]>('auction_created_dates') || [];
+      const updatedDates = createdDates.filter(d => d !== date);
+      await localforage.setItem('auction_created_dates', updatedDates);
+      
+      await loadHistory();
+      setDeletingDate(null);
+    } catch (err) {
+      console.error('Failed to delete history', err);
+    }
+  };
+
+  // Load all dates for history
+  const loadHistory = async () => {
+    try {
+      const keys = await localforage.keys();
+      
+      // Get dates from storage keys
+      const allPossibleDateKeys = keys.filter(k => 
+        k.startsWith('auction_items_') || 
+        k.startsWith('auction_images_') || 
+        k.startsWith('auction_statuses_')
+      );
+      
+      const storageDates = allPossibleDateKeys.map(k => {
+        if (k.startsWith('auction_items_')) return k.replace('auction_items_', '');
+        if (k.startsWith('auction_images_')) return k.replace('auction_images_', '');
+        if (k.startsWith('auction_statuses_')) return k.replace('auction_statuses_', '');
+        return '';
+      });
+
+      // Get dates from explicit created list
+      const createdDates = await localforage.getItem<string[]>('auction_created_dates') || [];
+      
+      // Combine and unique
+      const uniqueDates = Array.from(new Set([...storageDates, ...createdDates])).filter(d => d !== '');
+
+      const history = await Promise.all(uniqueDates.map(async (date) => {
+        const items = await localforage.getItem<AuctionItem[]>(`auction_items_${date}`) || [];
+        const total = items.reduce((sum, item) => sum + item.price, 0);
+        return { date, total };
+      }));
+      setAllDates(history.sort((a, b) => b.date.localeCompare(a.date)));
+    } catch (err) {
+      console.error('Failed to load history', err);
+    }
+  };
+
+  // Load data on mount or date change
   useEffect(() => {
     const loadData = async () => {
+      setIsLoaded(false);
       try {
-        const savedItems = await localforage.getItem<AuctionItem[]>('auction_items');
-        if (savedItems) setItems(savedItems);
+        const savedItems = await localforage.getItem<AuctionItem[]>(`auction_items_${selectedDate}`);
+        setItems(savedItems || []);
 
-        const savedImages = await localforage.getItem<Record<string, string[]>>('auction_images');
-        if (savedImages) setWinnerImages(savedImages);
+        const savedImages = await localforage.getItem<Record<string, string[]>>(`auction_images_${selectedDate}`);
+        setWinnerImages(savedImages || {});
 
-        const savedStatuses = await localforage.getItem<Record<string, { isPaid: boolean, isPrepared: boolean, isShipped: boolean }>>('auction_statuses');
-        if (savedStatuses) setWinnerStatuses(savedStatuses);
+        const savedStatuses = await localforage.getItem<Record<string, { isPaid: boolean, isPrepared: boolean, isShipped: boolean }>>(`auction_statuses_${selectedDate}`);
+        setWinnerStatuses(savedStatuses || {});
 
-        const savedFee = await localforage.getItem<number>('auction_shipping_fee');
-        if (savedFee !== null) setGlobalShippingFee(savedFee);
+        const savedFee = await localforage.getItem<number>(`auction_shipping_fee_${selectedDate}`);
+        setGlobalShippingFee(savedFee !== null ? savedFee : 50);
 
         const savedSender = await localforage.getItem<string>('auction_sender_address');
         if (savedSender) setSenderAddress(savedSender);
+        
+        await loadHistory();
       } catch (err) {
         console.error('Failed to load data', err);
       } finally {
@@ -90,28 +160,29 @@ export default function App() {
       }
     };
     loadData();
-  }, []);
+  }, [selectedDate]);
 
   // Save data on change
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem('auction_items', items);
-  }, [items, isLoaded]);
+    localforage.setItem(`auction_items_${selectedDate}`, items);
+    loadHistory();
+  }, [items, isLoaded, selectedDate]);
 
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem('auction_images', winnerImages);
-  }, [winnerImages, isLoaded]);
+    localforage.setItem(`auction_images_${selectedDate}`, winnerImages);
+  }, [winnerImages, isLoaded, selectedDate]);
 
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem('auction_statuses', winnerStatuses);
-  }, [winnerStatuses, isLoaded]);
+    localforage.setItem(`auction_statuses_${selectedDate}`, winnerStatuses);
+  }, [winnerStatuses, isLoaded, selectedDate]);
 
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem('auction_shipping_fee', globalShippingFee);
-  }, [globalShippingFee, isLoaded]);
+    localforage.setItem(`auction_shipping_fee_${selectedDate}`, globalShippingFee);
+  }, [globalShippingFee, isLoaded, selectedDate]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -352,7 +423,16 @@ export default function App() {
     const itemsText = s.items.map(i => 
       `- ${i.name}${i.subs.length > 0 ? ` (ย่อย: ${i.subs.join(', ')})` : ''}: ${i.price.toLocaleString()} บาท`
     ).join('\n');
-    return `📦 สรุปยอดประมูล: ${s.winner}\n\nรายการสินค้า:\n${itemsText}\n\n💰 ค่าสินค้า: ${s.totalPrice.toLocaleString()} บาท\n🚚 ค่าส่ง: ${s.shippingFee} บาท\n✅ ยอดโอนรวม: ${s.grandTotal.toLocaleString()} บาท`;
+    
+    return `📦 สรุปยอดประมูล: ${s.winner}\n\n` +
+           `รายการสินค้า:\n${itemsText}\n\n` +
+           `💰 ค่าสินค้า: ${s.totalPrice.toLocaleString()} บาท\n` +
+           `🚚 ค่าส่ง: ${s.shippingFee} บาท\n` +
+           `✅ ยอดโอนรวม: ${s.grandTotal.toLocaleString()} บาท\n\n` +
+           `🏦 ช่องทางการชำระเงิน:\n` +
+           `พร้อมเพย์ 0955188408\n` +
+           `นายศราวุธ ปิ่นทอง\n\n` +
+           `โอนแล้วส่งสลิป พร้อมแจ้งที่อยู่ได้เลยครับ จัดส่งภายในวันพรุ่งนี้ครับ`;
   };
 
   const copyToClipboard = () => {
@@ -473,62 +553,91 @@ export default function App() {
         {/* Header */}
         <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              <Calculator className="w-8 h-8 text-indigo-600" />
-              ระบบสรุปยอดประมูล
-            </h1>
-            <p className="text-slate-500 mt-1">จัดการและสรุปผลการประมูลอย่างรวดเร็ว (ค่าส่ง 50 บาท/คน)</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <div className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg shadow-sm group hover:border-indigo-300 transition-all">
-              <div className="flex items-center gap-1.5">
-                <Download className="w-3.5 h-3.5 text-slate-400 rotate-180" />
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">ค่าส่ง:</span>
-              </div>
-              <input 
-                type="number" 
-                value={globalShippingFee}
-                onChange={(e) => setGlobalShippingFee(Number(e.target.value))}
-                className="w-12 text-sm font-bold text-indigo-600 outline-none bg-transparent text-center"
-              />
-              <span className="text-xs font-bold text-slate-300">฿</span>
+            <div className="flex items-center gap-3 mb-1">
+              <h1 className="text-3xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                {view === 'main' && (
+                  <button 
+                    onClick={() => setView('history')}
+                    className="p-2 -ml-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-400 hover:text-indigo-600"
+                    title="กลับหน้าประวัติ"
+                  >
+                    <ArrowLeft className="w-6 h-6" />
+                  </button>
+                )}
+                <Calculator className="w-8 h-8 text-indigo-600" />
+                ระบบสรุปยอดประมูล
+              </h1>
+              {view === 'main' && (
+                <div className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-sm font-bold border border-indigo-100 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5" />
+                  {new Date(selectedDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })}
+                </div>
+              )}
             </div>
-            <button 
-              onClick={copyToClipboard}
-              disabled={summaries.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              <ClipboardCheck className="w-4 h-4" />
-              คัดลอกสรุปยอดทั้งหมด
-            </button>
-            <button 
-              onClick={copyAllAddresses}
-              disabled={summaries.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              <MapPin className="w-4 h-4" />
-              คัดลอกที่อยู่ทั้งหมด
-            </button>
-            <button 
-              onClick={() => window.print()}
-              disabled={summaries.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              <Printer className="w-4 h-4" />
-              พิมพ์ใบปะหน้า
-            </button>
-            <button 
-              onClick={exportToExcel}
-              disabled={summaries.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 border border-emerald-700 rounded-lg text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              <FileText className="w-4 h-4" />
-              ส่งออก Excel
-            </button>
+            <p className="text-slate-500">จัดการและสรุปผลการประมูลอย่างรวดเร็ว (Offline 100%)</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {view === 'main' && (
+              <>
+                {/* Shipping Fee */}
+                <div className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-xl shadow-sm group hover:border-indigo-300 transition-all">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tight">ค่าส่ง:</span>
+                  <input 
+                    type="number" 
+                    value={globalShippingFee}
+                    onChange={(e) => setGlobalShippingFee(Number(e.target.value))}
+                    className="w-10 text-sm font-bold text-indigo-600 outline-none bg-transparent text-center"
+                  />
+                  <span className="text-xs font-bold text-slate-300">฿</span>
+                </div>
+
+                {/* Action Group 1: Data */}
+                <div className="flex bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                  <button 
+                    onClick={copyToClipboard}
+                    disabled={summaries.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50 border-r border-slate-100 transition-colors"
+                  >
+                    <ClipboardCheck className="w-3.5 h-3.5" />
+                    สรุปยอด
+                  </button>
+                  <button 
+                    onClick={copyAllAddresses}
+                    disabled={summaries.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                  >
+                    <MapPin className="w-3.5 h-3.5" />
+                    ที่อยู่
+                  </button>
+                </div>
+
+                {/* Action Group 2: Export */}
+                <div className="flex bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                  <button 
+                    onClick={() => window.print()}
+                    disabled={items.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50 border-r border-slate-100 transition-colors"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    พิมพ์
+                  </button>
+                  <button 
+                    onClick={exportToExcel}
+                    disabled={items.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-emerald-600 hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    Excel
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </header>
 
-        {/* Sender Address Section */}
+        {view === 'main' ? (
+          <>
+            {/* Sender Address Section */}
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
             <h2 className="font-bold text-slate-900 flex items-center gap-2">
@@ -853,20 +962,16 @@ export default function App() {
                 </div>
               )}
             </section>
+          </div>
+        </div>
 
-            {/* Detailed Table */}
+        {/* Detailed Table */}
             {filteredItems.length > 0 && (
               <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                 <div className="px-6 py-4 border-bottom border-slate-100 bg-slate-50/50 flex justify-between items-center">
                   <h2 className="font-semibold text-slate-800">รายการทั้งหมด ({filteredItems.length})</h2>
                   <button 
-                    onClick={() => {
-                      if (confirm('คุณแน่ใจหรือไม่ว่าต้องการล้างข้อมูลทั้งหมด?')) {
-                        setItems([]);
-                        setWinnerImages({});
-                        setWinnerStatuses({});
-                      }
-                    }}
+                    onClick={() => setIsClearingAll(true)}
                     className="text-xs font-medium text-red-500 hover:text-red-600 transition-colors"
                   >
                     ล้างทั้งหมด
@@ -924,9 +1029,109 @@ export default function App() {
                 </div>
               </section>
             )}
+          </>
+        ) : (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+                <History className="w-7 h-7 text-indigo-600" />
+                ประวัติการประมูล
+              </h2>
+              <div className="bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-lg shadow-indigo-200">
+                <div className="text-[10px] font-bold uppercase opacity-80">ยอดรวมสะสมทั้งหมด</div>
+                <div className="text-2xl font-bold">
+                  {allDates.reduce((sum, d) => sum + d.total, 0).toLocaleString()} ฿
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Add New Date Card */}
+              <button 
+                onClick={() => setIsAddingDate(true)}
+                className="group bg-white border-2 border-dashed border-indigo-200 rounded-3xl p-8 flex flex-col items-center justify-center gap-4 hover:border-indigo-400 hover:bg-indigo-50 transition-all min-h-[200px]"
+              >
+                <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Plus className="w-8 h-8 text-indigo-600" />
+                </div>
+                <div className="text-center">
+                  <div className="font-bold text-indigo-600">เพิ่มวันประมูลใหม่</div>
+                  <div className="text-xs text-indigo-400 mt-1">สร้างรายการแยกตามวัน</div>
+                </div>
+              </button>
+
+              {allDates.map((history) => (
+                <motion.div
+                  key={history.date}
+                  whileHover={{ y: -5 }}
+                  className="bg-white rounded-3xl p-8 border border-slate-200 shadow-sm hover:shadow-xl hover:border-indigo-200 transition-all cursor-pointer group relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-50 rounded-bl-full -mr-8 -mt-8 transition-transform group-hover:scale-110" />
+                  
+                  <div className="relative z-10">
+                    <div className="flex justify-between items-start mb-6">
+                      <div 
+                        onClick={() => {
+                          setSelectedDate(history.date);
+                          setView('main');
+                        }}
+                        className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white transition-colors"
+                      >
+                        <Calendar className="w-6 h-6" />
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeletingDate(history.date);
+                        }}
+                        className="p-2 text-slate-300 hover:text-red-500 transition-colors bg-white rounded-full shadow-sm border border-slate-100"
+                        title="ลบประวัติ"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    </div>
+                    
+                    <div 
+                      onClick={() => {
+                        setSelectedDate(history.date);
+                        setView('main');
+                      }}
+                    >
+                      <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">วันที่ประมูล</div>
+                      <div className="text-2xl font-bold text-slate-900 mb-4">
+                        {new Date(history.date).toLocaleDateString('th-TH', { 
+                          year: 'numeric', 
+                          month: 'long', 
+                          day: 'numeric' 
+                        })}
+                      </div>
+                      
+                      <div className="pt-4 border-t border-slate-100 flex justify-between items-end">
+                        <div>
+                          <div className="text-[10px] font-bold text-slate-400 uppercase">ยอดขายรวม</div>
+                          <div className="text-xl font-bold text-indigo-600">{history.total.toLocaleString()} ฿</div>
+                        </div>
+                        <div className="w-8 h-8 bg-slate-50 rounded-full flex items-center justify-center text-slate-400 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">
+                          <ArrowLeft className="w-4 h-4 rotate-180" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+
+            {allDates.length === 0 && (
+              <div className="bg-white border-2 border-dashed border-slate-200 rounded-3xl p-20 text-center">
+                <History className="w-16 h-16 text-slate-200 mx-auto mb-6" />
+                <h3 className="text-xl font-bold text-slate-900 mb-2">ยังไม่มีประวัติการประมูล</h3>
+                <p className="text-slate-500">กดปุ่ม "เพิ่มวันประมูลใหม่" เพื่อเริ่มบันทึกข้อมูล</p>
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </div>
+    </div>
 
       {/* Detail Modal */}
       <AnimatePresence>
@@ -1377,7 +1582,160 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-    </div>
+
+      {/* Add New Date Modal */}
+      <AnimatePresence>
+        {isAddingDate && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden"
+            >
+              <div className="p-8">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-12 h-12 bg-indigo-100 rounded-2xl flex items-center justify-center">
+                    <Calendar className="w-6 h-6 text-indigo-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">เลือกวันที่ประมูล</h3>
+                    <p className="text-sm text-slate-500">ระบุวันที่ต้องการเริ่มบันทึกข้อมูล</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5 ml-1">วันที่</label>
+                    <input 
+                      type="date"
+                      value={tempDate}
+                      onChange={(e) => setTempDate(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 mt-8">
+                  <button
+                    onClick={() => setIsAddingDate(false)}
+                    className="px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (tempDate) {
+                        // Save to created dates list to ensure it persists even if empty
+                        const createdDates = await localforage.getItem<string[]>('auction_created_dates') || [];
+                        if (!createdDates.includes(tempDate)) {
+                          await localforage.setItem('auction_created_dates', [...createdDates, tempDate]);
+                        }
+                        
+                        await loadHistory();
+                        setSelectedDate(tempDate);
+                        setView('main');
+                        setIsAddingDate(false);
+                      }
+                    }}
+                    className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all"
+                  >
+                    ตกลง
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {deletingDate && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden"
+            >
+              <div className="p-8 text-center">
+                <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <Trash2 className="w-8 h-8 text-red-500" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 mb-2">ยืนยันการลบ?</h3>
+                <p className="text-slate-500 mb-8">
+                  คุณแน่ใจหรือไม่ว่าต้องการลบข้อมูลของวันที่ <br/>
+                  <span className="font-bold text-slate-900">
+                    {new Date(deletingDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </span>
+                  <br/>ข้อมูลทั้งหมดจะถูกลบถาวร
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setDeletingDate(null)}
+                    className="px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    onClick={() => deleteHistoryDate(deletingDate)}
+                    className="px-6 py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 shadow-lg shadow-red-200 transition-all"
+                  >
+                    ลบข้อมูล
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Clear All Confirmation Modal */}
+      <AnimatePresence>
+        {isClearingAll && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden"
+            >
+              <div className="p-8 text-center">
+                <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <AlertTriangle className="w-8 h-8 text-red-500" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-900 mb-2">ล้างข้อมูลทั้งหมด?</h3>
+                <p className="text-slate-500 mb-8">
+                  คุณแน่ใจหรือไม่ว่าต้องการล้างรายการประมูลทั้งหมดของวันนี้? <br/>
+                  <span className="text-red-500 font-bold">การดำเนินการนี้ไม่สามารถย้อนกลับได้</span>
+                </p>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => setIsClearingAll(false)}
+                    className="px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-colors"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    onClick={() => {
+                      setItems([]);
+                      setWinnerImages({});
+                      setWinnerStatuses({});
+                      setIsClearingAll(false);
+                    }}
+                    className="px-6 py-3 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 shadow-lg shadow-red-200 transition-all"
+                  >
+                    ยืนยันล้างข้อมูล
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     {/* Print Only Section */}
     <div className="hidden print:block w-full bg-white text-black p-4">

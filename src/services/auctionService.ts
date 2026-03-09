@@ -1,7 +1,3 @@
-import { GoogleGenAI, Type } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-
 export interface AuctionItem {
   mainItem: string;
   subItem?: string;
@@ -32,47 +28,6 @@ export interface AuctionSummary {
 }
 
 export const SHIPPING_FEE_PER_WINNER = 50;
-
-export async function parseAuctionText(text: string): Promise<AuctionItem[]> {
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: `Parse the following auction text and extract the items, sub-items, winners, and prices. 
-    
-    Rules:
-    1. Identify the main item (รายการ) and the sub-item (รายการย่อย/ลำดับ).
-    2. If a row is missing a winner or price, skip it.
-    3. Ensure the price is a number.
-    4. Handle Thai, English, and other languages correctly.
-    5. Context awareness: If a main item name is listed once but followed by multiple sub-items, associate all those sub-items with that main item.
-    6. Return an array of objects with keys: "mainItem", "subItem", "winner", "price".
-
-    Text: "${text}"`,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            mainItem: { type: Type.STRING },
-            subItem: { type: Type.STRING },
-            winner: { type: Type.STRING },
-            price: { type: Type.NUMBER },
-            contactLink: { type: Type.STRING },
-          },
-          required: ["mainItem", "winner", "price"],
-        },
-      },
-    },
-  });
-
-  try {
-    return JSON.parse(response.text || "[]");
-  } catch (e) {
-    console.error("Failed to parse Gemini response", e);
-    return [];
-  }
-}
 
 export function groupAuctionItems(items: AuctionItem[], shippingFee: number = SHIPPING_FEE_PER_WINNER): AuctionSummary[] {
   const groups: Record<string, AuctionSummary> = {};
@@ -123,3 +78,4 @@ export function groupAuctionItems(items: AuctionItem[], shippingFee: number = SH
 
   return Object.values(groups).sort((a, b) => b.grandTotal - a.grandTotal);
 }
+
