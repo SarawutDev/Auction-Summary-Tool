@@ -87,20 +87,14 @@ export default function App() {
 
   const exportBackup = async () => {
     try {
-      const keys = await localforage.keys();
-      const backupData: Record<string, any> = {};
-      
-      for (const key of keys) {
-        if (key.startsWith('auction_') || key === 'auction_created_dates') {
-          backupData[key] = await localforage.getItem(key);
-        }
-      }
+      const response = await fetch('/api/backup');
+      const backupData = await response.json();
       
       const blob = new Blob([JSON.stringify(backupData)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `auction_backup_${new Date().toISOString().split('T')[0]}.json`;
+      a.download = `auction_db_backup_${new Date().toISOString().split('T')[0]}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -121,15 +115,13 @@ export default function App() {
       const text = await file.text();
       const data = JSON.parse(text);
       
-      if (typeof data !== 'object' || data === null) {
-        throw new Error('Invalid backup file');
-      }
-      
-      for (const [key, value] of Object.entries(data)) {
-        if (key.startsWith('auction_') || key === 'auction_created_dates') {
-          await localforage.setItem(key, value);
-        }
-      }
+      const response = await fetch('/api/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+
+      if (!response.ok) throw new Error('Restore failed');
       
       await loadHistory();
       showToast('นำเข้าข้อมูลสำเร็จ!');
@@ -142,54 +134,24 @@ export default function App() {
 
   const deleteHistoryDate = async (date: string) => {
     try {
-      await localforage.removeItem(`auction_items_${date}`);
-      await localforage.removeItem(`auction_images_${date}`);
-      await localforage.removeItem(`auction_statuses_${date}`);
-      await localforage.removeItem(`auction_shipping_fee_${date}`);
-      
-      // Remove from created dates list
-      const createdDates = await localforage.getItem<string[]>('auction_created_dates') || [];
-      const updatedDates = createdDates.filter(d => d !== date);
-      await localforage.setItem('auction_created_dates', updatedDates);
+      const response = await fetch(`/api/dates/${date}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Delete failed');
       
       await loadHistory();
       setDeletingDate(null);
+      showToast('ลบประวัติสำเร็จ');
     } catch (err) {
       console.error('Failed to delete history', err);
+      showToast('ลบประวัติไม่สำเร็จ', 'error');
     }
   };
 
   // Load all dates for history
   const loadHistory = async () => {
     try {
-      const keys = await localforage.keys();
-      
-      // Get dates from storage keys
-      const allPossibleDateKeys = keys.filter(k => 
-        k.startsWith('auction_items_') || 
-        k.startsWith('auction_images_') || 
-        k.startsWith('auction_statuses_')
-      );
-      
-      const storageDates = allPossibleDateKeys.map(k => {
-        if (k.startsWith('auction_items_')) return k.replace('auction_items_', '');
-        if (k.startsWith('auction_images_')) return k.replace('auction_images_', '');
-        if (k.startsWith('auction_statuses_')) return k.replace('auction_statuses_', '');
-        return '';
-      });
-
-      // Get dates from explicit created list
-      const createdDates = await localforage.getItem<string[]>('auction_created_dates') || [];
-      
-      // Combine and unique
-      const uniqueDates = Array.from(new Set([...storageDates, ...createdDates])).filter(d => d !== '');
-
-      const history = await Promise.all(uniqueDates.map(async (date) => {
-        const items = await localforage.getItem<AuctionItem[]>(`auction_items_${date}`) || [];
-        const total = items.reduce((sum, item) => sum + item.price, 0);
-        return { date, total };
-      }));
-      setAllDates(history.sort((a, b) => b.date.localeCompare(a.date)));
+      const response = await fetch('/api/dates');
+      const history = await response.json();
+      setAllDates(history);
     } catch (err) {
       console.error('Failed to load history', err);
     }
@@ -200,20 +162,17 @@ export default function App() {
     const loadData = async () => {
       setIsLoaded(false);
       try {
-        const savedItems = await localforage.getItem<AuctionItem[]>(`auction_items_${selectedDate}`);
-        setItems(savedItems || []);
+        const response = await fetch(`/api/auction/${selectedDate}`);
+        const data = await response.json();
+        
+        setItems(data.items || []);
+        setWinnerImages(data.images || {});
+        setWinnerStatuses(data.statuses || {});
+        setGlobalShippingFee(data.shippingFee || 50);
 
-        const savedImages = await localforage.getItem<Record<string, string[]>>(`auction_images_${selectedDate}`);
-        setWinnerImages(savedImages || {});
-
-        const savedStatuses = await localforage.getItem<Record<string, { isPaid: boolean, isPrepared: boolean, isShipped: boolean }>>(`auction_statuses_${selectedDate}`);
-        setWinnerStatuses(savedStatuses || {});
-
-        const savedFee = await localforage.getItem<number>(`auction_shipping_fee_${selectedDate}`);
-        setGlobalShippingFee(savedFee !== null ? savedFee : 50);
-
-        const savedSender = await localforage.getItem<string>('auction_sender_address');
-        if (savedSender) setSenderAddress(savedSender);
+        const senderRes = await fetch('/api/settings/sender_address');
+        const senderData = await senderRes.json();
+        if (senderData.value) setSenderAddress(senderData.value);
         
         await loadHistory();
       } catch (err) {
@@ -225,32 +184,176 @@ export default function App() {
     loadData();
   }, [selectedDate]);
 
-  // Save data on change
+  // Save items when they change
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem(`auction_items_${selectedDate}`, items);
-    loadHistory();
-  }, [items, isLoaded, selectedDate]);
+    const saveData = async () => {
+      try {
+        await fetch(`/api/auction/${selectedDate}/items`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items })
+        });
+        loadHistory();
+      } catch (err) {
+        console.error('Failed to save items', err);
+      }
+    };
+    saveData();
+  }, [items, selectedDate, isLoaded]);
 
+  // Save images when they change
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem(`auction_images_${selectedDate}`, winnerImages);
-  }, [winnerImages, isLoaded, selectedDate]);
+    const saveImages = async () => {
+      try {
+        await fetch(`/api/auction/${selectedDate}/images`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ images: winnerImages })
+        });
+      } catch (err) {
+        console.error('Failed to save images', err);
+      }
+    };
+    saveImages();
+  }, [winnerImages, selectedDate, isLoaded]);
 
+  // Save statuses when they change
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem(`auction_statuses_${selectedDate}`, winnerStatuses);
-  }, [winnerStatuses, isLoaded, selectedDate]);
+    const saveStatuses = async () => {
+      try {
+        await fetch(`/api/auction/${selectedDate}/statuses`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ statuses: winnerStatuses })
+        });
+      } catch (err) {
+        console.error('Failed to save statuses', err);
+      }
+    };
+    saveStatuses();
+  }, [winnerStatuses, selectedDate, isLoaded]);
 
+  // Save shipping fee when it changes
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem(`auction_shipping_fee_${selectedDate}`, globalShippingFee);
-  }, [globalShippingFee, isLoaded, selectedDate]);
+    const saveShippingFee = async () => {
+      try {
+        await fetch(`/api/auction/${selectedDate}/shipping-fee`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fee: globalShippingFee })
+        });
+      } catch (err) {
+        console.error('Failed to save shipping fee', err);
+      }
+    };
+    saveShippingFee();
+  }, [globalShippingFee, selectedDate, isLoaded]);
 
+  // Save sender address when it changes
   useEffect(() => {
     if (!isLoaded) return;
-    localforage.setItem('auction_sender_address', senderAddress);
+    const saveSender = async () => {
+      try {
+        await fetch('/api/settings/sender_address', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: senderAddress })
+        });
+      } catch (err) {
+        console.error('Failed to save sender address', err);
+      }
+    };
+    saveSender();
   }, [senderAddress, isLoaded]);
+
+  useEffect(() => {
+    const migrateData = async () => {
+      try {
+        const keys = await localforage.keys();
+        if (keys.length === 0) return;
+        
+        const hasMigrated = await localforage.getItem('auction_migrated_to_server');
+        if (hasMigrated) return;
+
+        const backupData: Record<string, any> = {};
+        for (const key of keys) {
+          if (key.startsWith('auction_') || key === 'auction_created_dates') {
+            backupData[key] = await localforage.getItem(key);
+          }
+        }
+
+        const serverData: Record<string, any> = {
+          auction_dates: [],
+          auction_items: [],
+          auction_images: [],
+          auction_statuses: [],
+          auction_shipping_fees: []
+        };
+
+        const createdDates = backupData['auction_created_dates'] || [];
+        const storageDates = Object.keys(backupData)
+          .filter(k => k.startsWith('auction_items_'))
+          .map(k => k.replace('auction_items_', ''));
+        
+        const allDates = Array.from(new Set([...createdDates, ...storageDates]));
+        serverData.auction_dates = allDates.map(d => ({ date: d }));
+
+        for (const date of allDates) {
+          const items = backupData[`auction_items_${date}`] || [];
+          items.forEach((item: any) => {
+            serverData.auction_items.push({ ...item, date });
+          });
+
+          const images = backupData[`auction_images_${date}`] || {};
+          for (const [winner, imgList] of Object.entries(images)) {
+            (imgList as string[]).forEach(img => {
+              serverData.auction_images.push({ date, winner, imageData: img });
+            });
+          }
+
+          const statuses = backupData[`auction_statuses_${date}`] || {};
+          for (const [winner, status] of Object.entries(statuses)) {
+            const s = status as any;
+            serverData.auction_statuses.push({ date, winner, isPaid: s.isPaid ? 1 : 0, isPrepared: s.isPrepared ? 1 : 0, isShipped: s.isShipped ? 1 : 0 });
+          }
+
+          const fee = backupData[`auction_shipping_fee_${date}`];
+          if (fee !== undefined && fee !== null) {
+            serverData.auction_shipping_fees.push({ date, fee });
+          }
+        }
+
+        const sender = backupData['auction_sender_address'];
+        if (sender) {
+          await fetch('/api/settings/sender_address', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: sender })
+          });
+        }
+
+        const response = await fetch('/api/restore', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(serverData)
+        });
+
+        if (response.ok) {
+          await localforage.setItem('auction_migrated_to_server', true);
+          await loadHistory();
+          showToast('ย้ายข้อมูลจากเบราว์เซอร์เข้าสู่ฐานข้อมูลสำเร็จ!');
+        }
+      } catch (err) {
+        console.error('Migration failed', err);
+      }
+    };
+    migrateData();
+    loadHistory();
+  }, []);
 
   const summaries = useMemo(() => {
     const grouped = groupAuctionItems(items, globalShippingFee);
@@ -1713,16 +1816,20 @@ export default function App() {
                   <button
                     onClick={async () => {
                       if (tempDate) {
-                        // Save to created dates list to ensure it persists even if empty
-                        const createdDates = await localforage.getItem<string[]>('auction_created_dates') || [];
-                        if (!createdDates.includes(tempDate)) {
-                          await localforage.setItem('auction_created_dates', [...createdDates, tempDate]);
+                        try {
+                          await fetch('/api/dates', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ date: tempDate })
+                          });
+                          
+                          await loadHistory();
+                          setSelectedDate(tempDate);
+                          setView('main');
+                          setIsAddingDate(false);
+                        } catch (err) {
+                          console.error('Failed to add date', err);
                         }
-                        
-                        await loadHistory();
-                        setSelectedDate(tempDate);
-                        setView('main');
-                        setIsAddingDate(false);
                       }
                     }}
                     className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all"
