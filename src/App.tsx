@@ -30,7 +30,8 @@ import {
   ArrowLeft,
   AlertTriangle,
   FileSpreadsheet,
-  CheckCircle
+  CheckCircle,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -82,6 +83,61 @@ export default function App() {
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  const exportBackup = async () => {
+    try {
+      const keys = await localforage.keys();
+      const backupData: Record<string, any> = {};
+      
+      for (const key of keys) {
+        if (key.startsWith('auction_') || key === 'auction_created_dates') {
+          backupData[key] = await localforage.getItem(key);
+        }
+      }
+      
+      const blob = new Blob([JSON.stringify(backupData)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `auction_backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      showToast('สำรองข้อมูลสำเร็จ!');
+    } catch (err) {
+      console.error('Export failed', err);
+      showToast('เกิดข้อผิดพลาดในการสำรองข้อมูล', 'error');
+    }
+  };
+
+  const importBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      
+      if (typeof data !== 'object' || data === null) {
+        throw new Error('Invalid backup file');
+      }
+      
+      for (const [key, value] of Object.entries(data)) {
+        if (key.startsWith('auction_') || key === 'auction_created_dates') {
+          await localforage.setItem(key, value);
+        }
+      }
+      
+      await loadHistory();
+      showToast('นำเข้าข้อมูลสำเร็จ!');
+      event.target.value = '';
+    } catch (err) {
+      console.error('Import failed', err);
+      showToast('ไฟล์สำรองข้อมูลไม่ถูกต้อง', 'error');
+    }
   };
 
   const deleteHistoryDate = async (date: string) => {
@@ -1039,15 +1095,39 @@ export default function App() {
           </>
         ) : (
           <div className="space-y-6">
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center flex-wrap gap-4">
               <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
                 <History className="w-7 h-7 text-indigo-600" />
                 ประวัติการประมูล
               </h2>
-              <div className="bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-lg shadow-indigo-200">
-                <div className="text-[10px] font-bold uppercase opacity-80">ยอดรวมสะสมทั้งหมด</div>
-                <div className="text-2xl font-bold">
-                  {allDates.reduce((sum, d) => sum + d.total, 0).toLocaleString()} ฿
+              
+              <div className="flex items-center gap-3">
+                <div className="flex gap-2">
+                  <button
+                    onClick={exportBackup}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors shadow-sm text-sm"
+                    title="สำรองข้อมูลเป็นไฟล์ .json"
+                  >
+                    <Download className="w-4 h-4" />
+                    Backup
+                  </button>
+                  <label className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-colors cursor-pointer shadow-sm text-sm" title="นำเข้าข้อมูลจากไฟล์ .json">
+                    <Upload className="w-4 h-4" />
+                    Restore
+                    <input
+                      type="file"
+                      accept=".json"
+                      className="hidden"
+                      onChange={importBackup}
+                    />
+                  </label>
+                </div>
+
+                <div className="bg-indigo-600 text-white px-6 py-3 rounded-2xl shadow-lg shadow-indigo-200">
+                  <div className="text-[10px] font-bold uppercase opacity-80">ยอดรวมสะสมทั้งหมด</div>
+                  <div className="text-2xl font-bold">
+                    {allDates.reduce((sum, d) => sum + d.total, 0).toLocaleString()} ฿
+                  </div>
                 </div>
               </div>
             </div>
