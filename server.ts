@@ -73,8 +73,20 @@ async function startServer() {
   });
 
   app.get('/api/dates', (req, res) => {
-    const rows = db.prepare('SELECT date FROM auction_dates').all() as { date: string }[];
-    const dates = rows.map(r => r.date);
+    // Get unique dates from all tables to ensure history is always complete
+    const rows = db.prepare(`
+      SELECT date FROM auction_dates
+      UNION
+      SELECT DISTINCT date FROM auction_items
+      UNION
+      SELECT DISTINCT date FROM auction_images
+      UNION
+      SELECT DISTINCT date FROM auction_statuses
+      UNION
+      SELECT DISTINCT date FROM auction_shipping_fees
+    `).all() as { date: string }[];
+    
+    const dates = rows.map(r => r.date).filter(Boolean);
     
     // Calculate totals for each date
     const history = dates.map(date => {
@@ -143,6 +155,9 @@ async function startServer() {
     const { date } = req.params;
     const { items } = req.body;
     try {
+      // Ensure date exists in auction_dates
+      db.prepare('INSERT OR IGNORE INTO auction_dates (date) VALUES (?)').run(date);
+      
       db.prepare('DELETE FROM auction_items WHERE date = ?').run(date);
       const insert = db.prepare('INSERT INTO auction_items (date, mainItem, subItem, winner, price, contactLink, address) VALUES (?, ?, ?, ?, ?, ?, ?)');
       const transaction = db.transaction((items) => {
@@ -161,6 +176,9 @@ async function startServer() {
     const { date } = req.params;
     const { images } = req.body; // Record<string, string[]>
     try {
+      // Ensure date exists in auction_dates
+      db.prepare('INSERT OR IGNORE INTO auction_dates (date) VALUES (?)').run(date);
+      
       db.prepare('DELETE FROM auction_images WHERE date = ?').run(date);
       const insert = db.prepare('INSERT INTO auction_images (date, winner, imageData) VALUES (?, ?, ?)');
       const transaction = db.transaction((imagesMap) => {
@@ -181,6 +199,9 @@ async function startServer() {
     const { date } = req.params;
     const { statuses } = req.body; // Record<string, {isPaid, isPrepared, isShipped}>
     try {
+      // Ensure date exists in auction_dates
+      db.prepare('INSERT OR IGNORE INTO auction_dates (date) VALUES (?)').run(date);
+      
       db.prepare('DELETE FROM auction_statuses WHERE date = ?').run(date);
       const insert = db.prepare('INSERT INTO auction_statuses (date, winner, isPaid, isPrepared, isShipped) VALUES (?, ?, ?, ?, ?)');
       const transaction = db.transaction((statusMap) => {
@@ -199,6 +220,9 @@ async function startServer() {
     const { date } = req.params;
     const { fee } = req.body;
     try {
+      // Ensure date exists in auction_dates
+      db.prepare('INSERT OR IGNORE INTO auction_dates (date) VALUES (?)').run(date);
+      
       db.prepare('INSERT OR REPLACE INTO auction_shipping_fees (date, fee) VALUES (?, ?)').run(date, fee);
       res.json({ success: true });
     } catch (err) {
