@@ -29,7 +29,8 @@ import {
   History,
   ArrowLeft,
   AlertTriangle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  CheckCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -76,6 +77,12 @@ export default function App() {
   const [tempDate, setTempDate] = useState(new Date().toISOString().split('T')[0]);
   const [deletingDate, setDeletingDate] = useState<string | null>(null);
   const [isClearingAll, setIsClearingAll] = useState(false);
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
 
   const deleteHistoryDate = async (date: string) => {
     try {
@@ -439,7 +446,7 @@ export default function App() {
     const text = summaries.map(s => formatSummaryText(s)).join('\n\n' + '─'.repeat(20) + '\n\n') + `\n\n💰 ยอดรวมทั้งหมดทุกออเดอร์: ${grandTotal.toLocaleString()} บาท (ไม่รวมค่าส่ง)`;
     
     navigator.clipboard.writeText(text);
-    alert('คัดลอกสรุปยอดทั้งหมดแล้ว!');
+    showToast('คัดลอกสรุปยอดทั้งหมดแล้ว!');
   };
 
   const copyAllAddresses = () => {
@@ -453,7 +460,7 @@ export default function App() {
     }).join('\n\n' + '-'.repeat(27) + '\n\n');
     
     navigator.clipboard.writeText(addressesText);
-    alert('คัดลอกที่อยู่ทั้งหมดแล้ว!');
+    showToast('คัดลอกที่อยู่ทั้งหมดแล้ว!');
   };
 
   const exportToExcel = () => {
@@ -516,7 +523,7 @@ export default function App() {
   const copyWinnerSummary = (s: AuctionSummary) => {
     const text = formatSummaryText(s);
     navigator.clipboard.writeText(text);
-    alert(`คัดลอกสรุปยอดของ ${s.winner} แล้ว!`);
+    showToast(`คัดลอกสรุปยอดของ ${s.winner} แล้ว!`);
   };
 
   const copyImageToClipboard = async (base64: string) => {
@@ -528,10 +535,10 @@ export default function App() {
           [blob.type]: blob
         })
       ]);
-      alert('คัดลอกรูปภาพแล้ว!');
+      showToast('คัดลอกรูปภาพแล้ว!');
     } catch (err) {
       console.error(err);
-      alert('เบราว์เซอร์ของคุณไม่รองรับการคัดลอกรูปภาพโดยตรง กรุณาบันทึกรูปแทน');
+      showToast('เบราว์เซอร์ของคุณไม่รองรับการคัดลอกรูปภาพโดยตรง กรุณาบันทึกรูปแทน', 'error');
     }
   };
 
@@ -1736,6 +1743,30 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+    {/* Toast Notification */}
+    <AnimatePresence>
+      {toast && (
+        <motion.div
+          initial={{ opacity: 0, y: 50 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 50 }}
+          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[9999]"
+        >
+          <div className={cn(
+            "px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 min-w-[300px]",
+            toast.type === 'success' ? "bg-slate-900 text-white" : "bg-red-500 text-white"
+          )}>
+            {toast.type === 'success' ? (
+              <CheckCircle className="w-6 h-6 text-emerald-400" />
+            ) : (
+              <AlertTriangle className="w-6 h-6 text-white" />
+            )}
+            <span className="font-bold text-lg">{toast.message}</span>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
 
     {/* Print Only Section */}
     <div className="hidden print:block w-full bg-white text-black p-4">
